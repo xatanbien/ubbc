@@ -1,14 +1,27 @@
-# ubbc_xa_server.py
-# Run: pip install flask flask_cors
+# ubbc_xa_server_v2.py
+# -*- coding: utf-8 -*-
+"""
+UBBC XA - Server (Flask)
+- Nhận báo cáo từ client (POST /api/report)
+- Trả status tổng hợp (GET /api/status)
+- Trang dashboard hiển thị tiến độ (GET /)
+- Lưu tiến độ vào progress.json
+- Option: API_KEY để hạn chế gửi
+"""
 from flask import Flask, request, jsonify, render_template_string
 from flask_cors import CORS
 import os, json, time
+from datetime import datetime
+
 app = Flask(__name__)
 CORS(app)
 
+# Config: đổi nếu muốn
 DATA_FILE = "progress.json"
-API_KEY = None  # set a string to require key, or None to disable
+API_KEY = None  # Nếu muốn bảo mật, gán chuỗi, ví dụ "mabimat123"
+# Nếu bạn đặt API_KEY, client phải gửi field "api_key" trong JSON hoặc header X-API-KEY.
 
+# Utility: load & save progress
 def load_progress():
     if os.path.exists(DATA_FILE):
         try:
@@ -18,25 +31,43 @@ def load_progress():
             return {}
     return {}
 
-def save_progress(d):
-    with open(DATA_FILE, "w", encoding="utf-8") as f:
-        json.dump(d, f, ensure_ascii=False, indent=2)
+def save_progress(prog):
+    try:
+        with open(DATA_FILE, "w", encoding="utf-8") as f:
+            json.dump(prog, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
 
+# Endpoint nhận báo cáo từ client
 @app.route("/api/report", methods=["POST"])
 def api_report():
-    data = request.get_json(force=True)
+    data = request.get_json(force=True, silent=True)
+    if not data:
+        return jsonify({"error": "invalid json"}), 400
+
+    # API key check (nếu bật)
     if API_KEY:
         key = data.get("api_key") or request.headers.get("X-API-KEY")
         if key != API_KEY:
-            return jsonify({"error":"invalid api_key"}), 403
-    # expected fields
-    don_vi = data.get("don_vi","unknown")
-    khu_vuc = data.get("khu_vuc","unknown")
-    tong = int(data.get("tong") or 0)
-    da_bau = int(data.get("da_bau") or 0)
+            return jsonify({"error": "invalid api_key"}), 403
+
+    don_vi = str(data.get("don_vi", "")).strip() or "unknown"
+    khu_vuc = str(data.get("khu_vuc", "")).strip() or "unknown"
+    try:
+        tong = int(data.get("tong") or 0)
+    except Exception:
+        tong = 0
+    try:
+        da_bau = int(data.get("da_bau") or 0)
+    except Exception:
+        da_bau = 0
     con_lai = int(data.get("con_lai") or (tong - da_bau))
-    ty_le = float(data.get("ty_le") or ( (da_bau/tong*100) if tong>0 else 0 ))
-    cap_nhat = data.get("cap_nhat") or time.strftime("%H:%M:%S")
+    try:
+        ty_le = float(data.get("ty_le") or ( (da_bau / tong * 100) if tong>0 else 0 ))
+    except Exception:
+        ty_le = round((da_bau / tong * 100) if tong>0 else 0, 1)
+    cap_nhat = data.get("cap_nhat") or datetime.now().strftime("%H:%M:%S %d/%m/%Y")
+
     prog = load_progress()
     # structure: prog[don_vi][khu_vuc] = {...}
     if don_vi not in prog:
@@ -45,115 +76,120 @@ def api_report():
         "tong": tong,
         "da_bau": da_bau,
         "con_lai": con_lai,
-        "ty_le": round(ty_le,1),
+        "ty_le": round(ty_le, 1),
         "cap_nhat": cap_nhat
     }
     save_progress(prog)
     return jsonify({"ok": True})
 
+# Endpoint trả toàn bộ status (JSON)
 @app.route("/api/status", methods=["GET"])
 def api_status():
     return jsonify(load_progress())
 
-# Simple dashboard page using Chart.js for small pies and totals
+# Dashboard HTML (đơn giản, responsive, dùng Chart.js)
 DASH_HTML = """
 <!doctype html>
 <html>
 <head>
   <meta charset="utf-8">
-  <title>UBBC Xa - Tong quan</title>
+  <title>UBBC XÃ TÂN BIÊN - TỔNG QUAN</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
   <style>
-    body{font-family: Arial, Helvetica, sans-serif; background:#f8fbff; padding:16px;}
+    body{font-family: Arial, Helvetica, sans-serif; background:#f8fbff; margin:0; padding:12px;}
     header{background:#b30000;color:#fff;padding:10px 16px;border-radius:6px;}
-    .unit{border:1px solid #ddd;padding:10px;margin:8px;border-radius:6px;background:#fff;}
-    .kv{display:inline-block;width:220px;margin:6px;vertical-align:top;}
-    .smallchart{width:120px;height:120px;}
-    .summary{font-size:18px;margin:8px 0;}
+    header h1{margin:0;font-size:20px}
+    .topinfo{display:flex;gap:16px;flex-wrap:wrap;margin-top:10px}
+    .card{background:#fff;border-radius:8px;padding:10px;box-shadow:0 1px 4px rgba(0,0,0,0.08);}
+    .unit{margin-top:12px;padding:10px;border-radius:8px;background:#fff;border:1px solid #eee}
+    .kv{display:inline-block;vertical-align:top;width:220px;margin:8px}
+    .kv canvas{width:120px;height:120px}
+    .summary{font-size:16px}
+    .footer{margin-top:12px;color:gray;font-size:13px}
+    @media (max-width:700px){ .kv{width:48%} }
   </style>
 </head>
 <body>
   <header>
-    <h2>UBBC XÃ TÂN BIÊN - TỔNG QUAN TIẾN ĐỘ BỎ PHIẾU</h2>
-    <div id="updated" style="font-size:14px;opacity:0.9"></div>
+    <h1>UBBC XÃ TÂN BIÊN - TIẾN ĐỘ BỎ PHIẾU</h1>
+    <div id="updated" style="font-size:13px;opacity:0.95;margin-top:6px"></div>
   </header>
+
   <div id="content"></div>
 
 <script>
 async function fetchStatus(){
-  const r = await fetch('/api/status');
-  return await r.json();
+  try{
+    const r = await fetch('/api/status');
+    return await r.json();
+  }catch(e){
+    console.error(e);
+    return {};
+  }
 }
 
-function mkPieCanvas(id, voted, remain, label){
-  const canvas = document.createElement('canvas');
-  canvas.id = id;
-  canvas.className = 'smallchart';
-  return canvas;
-}
+function clearChildren(el){ while(el.firstChild) el.removeChild(el.firstChild); }
 
 function render(prog){
   const content = document.getElementById('content');
-  content.innerHTML = '';
-  let total_all=0, voted_all=0;
-  for(let don_vi in prog){
-    const unitDiv = document.createElement('div');
-    unitDiv.className='unit';
-    const title = document.createElement('h3');
-    title.textContent = don_vi;
-    unitDiv.appendChild(title);
-    const kvs = prog[don_vi];
-    const kvWrap = document.createElement('div');
-    for(let kv in kvs){
-      const info = kvs[kv];
-      const kvDiv = document.createElement('div');
-      kvDiv.className='kv';
-      const h = document.createElement('div');
-      h.innerHTML = `<strong>${kv}</strong>`;
-      kvDiv.appendChild(h);
-      const canvas = document.createElement('canvas');
-      const cid = `c_${don_vi}_${kv}`.replace(/\\s+/g,'_');
-      canvas.id = cid;
-      canvas.width=120; canvas.height=120;
-      kvDiv.appendChild(canvas);
-      const text = document.createElement('div');
-      text.innerHTML = `Đã bầu: ${info.da_bau}/${info.tong} (${info.ty_le}%)<br>Còn lại: ${info.con_lai}/${info.tong}`;
-      kvDiv.appendChild(text);
-      kvWrap.appendChild(kvDiv);
+  clearChildren(content);
+  // compute totals
+  let total_all = 0, voted_all = 0;
+  for(const dv in prog){
+    for(const kv in prog[dv]){
+      total_all += (prog[dv][kv].tong || 0);
+      voted_all += (prog[dv][kv].da_bau || 0);
+    }
+  }
+  const summaryDiv = document.createElement('div');
+  summaryDiv.className='card summary';
+  const pct = total_all ? (voted_all/total_all*100).toFixed(1) : 0;
+  summaryDiv.innerHTML = `<strong>🔵 Tổng toàn xã:</strong> Đã bầu <b>${voted_all}/${total_all}</b> (${pct}%) &nbsp;&nbsp; 🔴 Còn lại <b>${total_all - voted_all}/${total_all}</b>`;
+  content.appendChild(summaryDiv);
 
+  // per unit
+  for(const dv in prog){
+    const unitDiv = document.createElement('div');
+    unitDiv.className = 'unit';
+    const title = document.createElement('h3');
+    title.textContent = dv;
+    unitDiv.appendChild(title);
+
+    const kvWrap = document.createElement('div');
+    for(const kv in prog[dv]){
+      const info = prog[dv][kv];
+      const kvDiv = document.createElement('div');
+      kvDiv.className = 'kv card';
+      const canvas = document.createElement('canvas');
+      const cid = 'c_'+dv.replace(/\s+/g,'_')+'_'+kv.replace(/\s+/g,'_')+'_'+Math.random().toString(36).slice(2,7);
+      canvas.id = cid;
+      const txt = document.createElement('div');
+      txt.innerHTML = `<b>${kv}</b><br>Đã bầu: ${info.da_bau}/${info.tong} (${info.ty_le}%)<br>Còn lại: ${info.con_lai}/${info.tong}<br><small>(${info.cap_nhat || ''})</small>`;
+      kvDiv.appendChild(canvas);
+      kvDiv.appendChild(txt);
+      kvWrap.appendChild(kvDiv);
       // draw chart
       const ctx = canvas.getContext('2d');
       new Chart(ctx, {
         type:'pie',
         data:{
           labels:['Đã bầu','Còn lại'],
-          datasets:[{data:[info.da_bau, info.con_lai], backgroundColor:['#0074D9','#FF4136']}]
+          datasets:[{data:[info.da_bau||0, info.con_lai||0], backgroundColor:['#0074D9','#FF4136'] }]
         },
         options:{plugins:{legend:{display:false}},maintainAspectRatio:false}
       });
-
-      total_all += info.tong;
-      voted_all += info.da_bau;
     }
     unitDiv.appendChild(kvWrap);
     content.appendChild(unitDiv);
   }
-  // overall
-  const summary = document.createElement('div');
-  summary.className='summary';
-  const percent = total_all>0? (voted_all/total_all*100).toFixed(1):0;
-  summary.innerHTML = `<strong>Tổng toàn xã:</strong> Đã bầu ${voted_all}/${total_all}  ${percent}%  &nbsp;&nbsp; Còn lại: ${ (total_all - voted_all) }/${total_all} ${ (100 - percent).toFixed(1) }%`;
-  content.insertBefore(summary, content.firstChild);
+
   document.getElementById('updated').textContent = 'Cập nhật: ' + new Date().toLocaleString();
 }
 
 async function loop(){
-  try{
-    const p = await fetchStatus();
-    render(p||{});
-  }catch(e){
-    console.error(e);
-  }
+  const prog = await fetchStatus();
+  render(prog || {});
 }
 loop();
 setInterval(loop, 10000);
@@ -162,10 +198,10 @@ setInterval(loop, 10000);
 </html>
 """
 
-@app.route("/", methods=["GET"])
-def page_index():
+@app.route("/")
+def index():
     return render_template_string(DASH_HTML)
 
 if __name__ == "__main__":
-    # run server on 0.0.0.0 so accessible externally (if port forwarded / public IP)
-    app.run(host="0.0.0.0", port=5000, debug=False)
+    # Port 5000 là chuẩn; Render sẽ chạy file này
+    app.run(host="0.0.0.0", port=5000)
