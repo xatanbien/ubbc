@@ -1,93 +1,54 @@
-# ubbc_xa_server_v2.py
-# -*- coding: utf-8 -*-
-"""
-UBBC XA - Server (Flask)
-- Nhận báo cáo từ client (POST /api/report)
-- Trả status tổng hợp (GET /api/status)
-- Trang dashboard hiển thị tiến độ (GET /)
-- Lưu tiến độ vào progress.json
-- Option: API_KEY để hạn chế gửi
-"""
-from flask import Flask, request, jsonify, render_template_string
-from flask_cors import CORS
-import os, json, time
-from datetime import datetime
+from flask import Flask, jsonify
+import time
 
 app = Flask(__name__)
-CORS(app)
 
-# Config: đổi nếu muốn
-DATA_FILE = "progress.json"
-API_KEY = None  # Nếu muốn bảo mật, gán chuỗi, ví dụ "mabimat123"
-# Nếu bạn đặt API_KEY, client phải gửi field "api_key" trong JSON hoặc header X-API-KEY.
+# Dữ liệu mẫu: bạn có thể cập nhật từ client gửi về thực tế
+# Cấu trúc: { "Đơn vị bầu cử số 1": { "Khu vực 1": {...}, ... }, ... }
+data = {
+    "Đơn vị bầu cử số 1": {
+        "Khu vực 1": {"da_bau": 220, "con_lai": 30, "tong": 250, "ty_le": 88, "cap_nhat": "09:30"},
+        "Khu vực 2": {"da_bau": 180, "con_lai": 70, "tong": 250, "ty_le": 72, "cap_nhat": "09:31"},
+        "Khu vực 3": {"da_bau": 190, "con_lai": 60, "tong": 250, "ty_le": 76, "cap_nhat": "09:33"},
+        "Khu vực 4": {"da_bau": 230, "con_lai": 20, "tong": 250, "ty_le": 92, "cap_nhat": "09:35"},
+    },
+    "Đơn vị bầu cử số 2": {
+        "Khu vực 5": {"da_bau": 200, "con_lai": 50, "tong": 250, "ty_le": 80, "cap_nhat": "09:36"},
+        "Khu vực 6": {"da_bau": 150, "con_lai": 100, "tong": 250, "ty_le": 60, "cap_nhat": "09:38"},
+    },
+    "Đơn vị bầu cử số 3": {
+        "Khu vực 7": {"da_bau": 160, "con_lai": 90, "tong": 250, "ty_le": 64, "cap_nhat": "09:40"},
+        "Khu vực 8": {"da_bau": 210, "con_lai": 40, "tong": 250, "ty_le": 84, "cap_nhat": "09:41"},
+    },
+    "Đơn vị bầu cử số 4": {
+        "Khu vực 9": {"da_bau": 140, "con_lai": 110, "tong": 250, "ty_le": 56, "cap_nhat": "09:42"},
+        "Khu vực 10": {"da_bau": 220, "con_lai": 30, "tong": 250, "ty_le": 88, "cap_nhat": "09:44"},
+    },
+    "Đơn vị bầu cử số 5": {
+        "Khu vực 11": {"da_bau": 230, "con_lai": 20, "tong": 250, "ty_le": 92, "cap_nhat": "09:45"},
+        "Khu vực 12": {"da_bau": 180, "con_lai": 70, "tong": 250, "ty_le": 72, "cap_nhat": "09:46"},
+    },
+    "Đơn vị bầu cử số 6": {
+        "Khu vực 13": {"da_bau": 200, "con_lai": 50, "tong": 250, "ty_le": 80, "cap_nhat": "09:47"},
+        "Khu vực 14": {"da_bau": 190, "con_lai": 60, "tong": 250, "ty_le": 76, "cap_nhat": "09:48"},
+    },
+    "Đơn vị bầu cử số 7": {
+        "Khu vực 15": {"da_bau": 180, "con_lai": 70, "tong": 250, "ty_le": 72, "cap_nhat": "09:49"},
+        "Khu vực 16": {"da_bau": 170, "con_lai": 80, "tong": 250, "ty_le": 68, "cap_nhat": "09:50"},
+    },
+}
 
-# Utility: load & save progress
-def load_progress():
-    if os.path.exists(DATA_FILE):
-        try:
-            with open(DATA_FILE, "r", encoding="utf-8") as f:
-                return json.load(f)
-        except Exception:
-            return {}
-    return {}
 
-def save_progress(prog):
-    try:
-        with open(DATA_FILE, "w", encoding="utf-8") as f:
-            json.dump(prog, f, ensure_ascii=False, indent=2)
-    except Exception:
-        pass
-
-# Endpoint nhận báo cáo từ client
-@app.route("/api/report", methods=["POST"])
-def api_report():
-    data = request.get_json(force=True, silent=True)
-    if not data:
-        return jsonify({"error": "invalid json"}), 400
-
-    # API key check (nếu bật)
-    if API_KEY:
-        key = data.get("api_key") or request.headers.get("X-API-KEY")
-        if key != API_KEY:
-            return jsonify({"error": "invalid api_key"}), 403
-
-    don_vi = str(data.get("don_vi", "")).strip() or "unknown"
-    khu_vuc = str(data.get("khu_vuc", "")).strip() or "unknown"
-    try:
-        tong = int(data.get("tong") or 0)
-    except Exception:
-        tong = 0
-    try:
-        da_bau = int(data.get("da_bau") or 0)
-    except Exception:
-        da_bau = 0
-    con_lai = int(data.get("con_lai") or (tong - da_bau))
-    try:
-        ty_le = float(data.get("ty_le") or ( (da_bau / tong * 100) if tong>0 else 0 ))
-    except Exception:
-        ty_le = round((da_bau / tong * 100) if tong>0 else 0, 1)
-    cap_nhat = data.get("cap_nhat") or datetime.now().strftime("%H:%M:%S %d/%m/%Y")
-
-    prog = load_progress()
-    # structure: prog[don_vi][khu_vuc] = {...}
-    if don_vi not in prog:
-        prog[don_vi] = {}
-    prog[don_vi][khu_vuc] = {
-        "tong": tong,
-        "da_bau": da_bau,
-        "con_lai": con_lai,
-        "ty_le": round(ty_le, 1),
-        "cap_nhat": cap_nhat
-    }
-    save_progress(prog)
-    return jsonify({"ok": True})
-
-# Endpoint trả toàn bộ status (JSON)
-@app.route("/api/status", methods=["GET"])
+@app.route("/api/status")
 def api_status():
-    return jsonify(load_progress())
+    return jsonify(data)
 
-# Dashboard HTML (đơn giản, responsive, dùng Chart.js)
+
+@app.route("/")
+def index():
+    return DASH_HTML
+
+
 DASH_HTML = """
 <!doctype html>
 <html>
@@ -97,33 +58,79 @@ DASH_HTML = """
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
   <style>
-    body{font-family: Arial, Helvetica, sans-serif; background:#f8fbff; margin:0; padding:12px;}
-    header{background:#b30000;color:#fff;padding:10px 16px;border-radius:6px;}
-    header h1{margin:0;font-size:20px}
-    .topinfo{display:flex;gap:16px;flex-wrap:wrap;margin-top:10px}
-    .card{background:#fff;border-radius:8px;padding:10px;box-shadow:0 1px 4px rgba(0,0,0,0.08);}
-    .unit{margin-top:12px;padding:10px;border-radius:8px;background:#fff;border:1px solid #eee}
-    .kv{display:inline-block;vertical-align:top;width:220px;margin:8px}
-    .kv canvas{width:120px;height:120px}
-    .summary{font-size:16px}
-    .footer{margin-top:12px;color:gray;font-size:13px}
-    @media (max-width:700px){ .kv{width:48%} }
+    body {
+      font-family: Arial, Helvetica, sans-serif;
+      background: #f6f9ff;
+      margin: 0;
+      padding: 0;
+    }
+    header {
+      background: #b30000;
+      color: #fff;
+      padding: 10px 16px;
+      text-align: center;
+      font-size: 22px;
+      font-weight: bold;
+    }
+    .summary {
+      background: #fff;
+      margin: 12px auto;
+      width: 95%;
+      padding: 10px;
+      text-align: center;
+      border-radius: 8px;
+      box-shadow: 0 1px 4px rgba(0,0,0,0.08);
+      font-size: 16px;
+    }
+    .unit {
+      background: #fff;
+      width: 95%;
+      margin: 15px auto;
+      padding: 10px 15px;
+      border-radius: 8px;
+      box-shadow: 0 0 6px rgba(0,0,0,0.1);
+    }
+    .unit h3 {
+      margin: 8px 0;
+      color: #b30000;
+      font-size: 18px;
+    }
+    .kv-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+      gap: 10px;
+    }
+    .kv {
+      background: #fafafa;
+      border-radius: 8px;
+      border: 1px solid #ddd;
+      padding: 10px;
+      text-align: center;
+      box-shadow: 0 1px 2px rgba(0,0,0,0.05);
+    }
+    .kv canvas {
+      width: 120px;
+      height: 120px;
+      margin-bottom: 6px;
+    }
+    .footer {
+      text-align: center;
+      color: #777;
+      font-size: 13px;
+      margin: 20px 0;
+    }
   </style>
 </head>
 <body>
-  <header>
-    <h1>UBBC XÃ TÂN BIÊN - TIẾN ĐỘ BỎ PHIẾU</h1>
-    <div id="updated" style="font-size:13px;opacity:0.95;margin-top:6px"></div>
-  </header>
-
+  <header>UBBC XÃ TÂN BIÊN - TIẾN ĐỘ BỎ PHIẾU</header>
   <div id="content"></div>
 
 <script>
 async function fetchStatus(){
-  try{
+  try {
     const r = await fetch('/api/status');
     return await r.json();
-  }catch(e){
+  } catch(e){
     console.error(e);
     return {};
   }
@@ -134,7 +141,8 @@ function clearChildren(el){ while(el.firstChild) el.removeChild(el.firstChild); 
 function render(prog){
   const content = document.getElementById('content');
   clearChildren(content);
-  // compute totals
+
+  // Tổng toàn xã
   let total_all = 0, voted_all = 0;
   for(const dv in prog){
     for(const kv in prog[dv]){
@@ -142,13 +150,13 @@ function render(prog){
       voted_all += (prog[dv][kv].da_bau || 0);
     }
   }
-  const summaryDiv = document.createElement('div');
-  summaryDiv.className='card summary';
   const pct = total_all ? (voted_all/total_all*100).toFixed(1) : 0;
-  summaryDiv.innerHTML = `<strong>🔵 Tổng toàn xã:</strong> Đã bầu <b>${voted_all}/${total_all}</b> (${pct}%) &nbsp;&nbsp; 🔴 Còn lại <b>${total_all - voted_all}/${total_all}</b>`;
+  const summaryDiv = document.createElement('div');
+  summaryDiv.className = 'summary';
+  summaryDiv.innerHTML = `<b>🔵 Tổng toàn xã:</b> Đã bầu <b>${voted_all}/${total_all}</b> (${pct}%) &nbsp;&nbsp; 🔴 Còn lại: <b>${total_all - voted_all}/${total_all}</b>`;
   content.appendChild(summaryDiv);
 
-  // per unit
+  // Theo đơn vị
   for(const dv in prog){
     const unitDiv = document.createElement('div');
     unitDiv.className = 'unit';
@@ -156,35 +164,44 @@ function render(prog){
     title.textContent = dv;
     unitDiv.appendChild(title);
 
-    const kvWrap = document.createElement('div');
+    const kvGrid = document.createElement('div');
+    kvGrid.className = 'kv-grid';
+
     for(const kv in prog[dv]){
       const info = prog[dv][kv];
       const kvDiv = document.createElement('div');
-      kvDiv.className = 'kv card';
+      kvDiv.className = 'kv';
       const canvas = document.createElement('canvas');
-      const cid = 'c_'+dv.replace(/\s+/g,'_')+'_'+kv.replace(/\s+/g,'_')+'_'+Math.random().toString(36).slice(2,7);
+      const cid = 'c_'+dv.replace(/\\s+/g,'_')+'_'+kv.replace(/\\s+/g,'_')+'_'+Math.random().toString(36).slice(2,7);
       canvas.id = cid;
       const txt = document.createElement('div');
-      txt.innerHTML = `<b>${kv}</b><br>Đã bầu: ${info.da_bau}/${info.tong} (${info.ty_le}%)<br>Còn lại: ${info.con_lai}/${info.tong}<br><small>(${info.cap_nhat || ''})</small>`;
+      txt.innerHTML = `<b>${kv}</b><br>Đã bầu: ${info.da_bau}/${info.tong} (${info.ty_le}%)<br>Còn lại: ${info.con_lai}/${info.tong}<br><small>${info.cap_nhat || ''}</small>`;
       kvDiv.appendChild(canvas);
       kvDiv.appendChild(txt);
-      kvWrap.appendChild(kvDiv);
-      // draw chart
+      kvGrid.appendChild(kvDiv);
+
       const ctx = canvas.getContext('2d');
       new Chart(ctx, {
-        type:'pie',
-        data:{
-          labels:['Đã bầu','Còn lại'],
-          datasets:[{data:[info.da_bau||0, info.con_lai||0], backgroundColor:['#0074D9','#FF4136'] }]
+        type: 'doughnut',
+        data: {
+          labels: ['Đã bầu', 'Còn lại'],
+          datasets: [{
+            data: [info.da_bau||0, info.con_lai||0],
+            backgroundColor: ['#0074D9','#FF4136']
+          }]
         },
-        options:{plugins:{legend:{display:false}},maintainAspectRatio:false}
+        options: { plugins: { legend: { display:false } }, cutout: '60%' }
       });
     }
-    unitDiv.appendChild(kvWrap);
+
+    unitDiv.appendChild(kvGrid);
     content.appendChild(unitDiv);
   }
 
-  document.getElementById('updated').textContent = 'Cập nhật: ' + new Date().toLocaleString();
+  const footer = document.createElement('div');
+  footer.className = 'footer';
+  footer.textContent = 'Cập nhật: ' + new Date().toLocaleString();
+  content.appendChild(footer);
 }
 
 async function loop(){
@@ -198,10 +215,6 @@ setInterval(loop, 10000);
 </html>
 """
 
-@app.route("/")
-def index():
-    return render_template_string(DASH_HTML)
 
 if __name__ == "__main__":
-    # Port 5000 là chuẩn; Render sẽ chạy file này
     app.run(host="0.0.0.0", port=5000)
